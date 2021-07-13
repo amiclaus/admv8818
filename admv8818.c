@@ -82,9 +82,9 @@ unsigned long long freq_range_lpf[4][2] = {
 };
 
 static const struct regmap_config admv8818_regmap_config = {
-	.reg_bits = 15,
+	.reg_bits = 16,
 	.val_bits = 8,
-	.read_flag_mask = BIT(15),
+	.read_flag_mask = 0x80,
 	.max_register = 0x1FF,
 };
 
@@ -233,10 +233,6 @@ static int admv8818_probe(struct spi_device *spi)
 	indio_dev->channels = admv8818_channels;
 	indio_dev->num_channels = ARRAY_SIZE(admv8818_channels);
 
-	ret = clk_prepare_enable(dev->clkin);
-	if (ret < 0)
-		return ret;
-
 	dev->clkin = devm_clk_get(&spi->dev, "rf_in");
 	if (IS_ERR(dev->clkin))
 		return PTR_ERR(dev->clkin);
@@ -249,9 +245,9 @@ static int admv8818_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 	
-	ret = admv8818_rfin_band_select(dev);
-	if (ret)
-		return ret;
+	// ret = admv8818_rfin_band_select(dev);
+	// if (ret)
+	// 	return ret;
 
 	return devm_iio_device_register(&spi->dev, indio_dev);
 }
