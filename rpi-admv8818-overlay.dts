@@ -40,7 +40,7 @@
 			admv8818@0{
 				compatible = "adi,admv8818";
 				reg = <0>;
-				spi-max-frequency = <1000000>;
+				spi-max-frequency = <10000000>;
 				clocks = <&admv8818_rfin>;
 				clock-names = "rf_in";
 			};
