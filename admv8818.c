@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ADMV8818 driver
  *
@@ -9,10 +9,12 @@
 #include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/clkdev.h>
+#include <linux/clk/clkscale.h>
 #include <linux/clk-provider.h>
 #include <linux/device.h>
 #include <linux/iio/iio.h>
 #include <linux/module.h>
+#include <linux/notifier.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
 
@@ -52,6 +54,12 @@
 #define ADMV8818_LSBFIRST_MSK			BIT(1)
 #define ADMV8818_SOFTRESET_MSK			BIT(0)
 
+/* ADMV8818_REG_SPI_CONFIG_B Map */
+#define ADMV8818_SINGLE_INSTRUCTION_MSK		BIT(7)
+#define ADMV8818_CSB_STALL_MSK			BIT(6)
+#define ADMV8818_MASTER_SLAVE_RB_MSK		BIT(5)
+#define ADMV8818_MASTER_SLAVE_TRANSFER_MSK	BIT(0)
+
 /* ADMV8818_REG_WR0_SW Map */
 #define ADMV8818_SW_IN_SET_WR0_MSK		BIT(7)
 #define ADMV8818_SW_OUT_SET_WR0_MSK		BIT(6)
@@ -63,22 +71,26 @@
 #define ADMV8818_LPF_WR0_MSK			GENMASK(3, 0)
 
 struct admv8818_dev {
+	struct spi_device	*spi;
 	struct regmap		*regmap;
 	struct clk		*clkin;
+	struct clock_scale	clkscale;
+	struct notifier_block	nb;
+	u64			clkin_freq;
 };
 
 unsigned long long freq_range_hpf[4][2] = {
-	{1750000000ull, 3550000000ull},
-	{3400000000ull, 7250000000ull},
-	{6600000000ull, 12000000000ull},
-	{12500000000ull, 19900000000ull}
+	{1750000000llu, 3550000000llu},
+	{3400000000llu, 7250000000llu},
+	{6600000000, 12000000000},
+	{12500000000, 19900000000}
 };
 
 unsigned long long freq_range_lpf[4][2] = {
-	{2050000000ull, 3850000000ull},
-	{3350000000ull, 7250000000ull},
-	{7000000000ull, 13000000000ull},
-	{12550000000ull, 18500000000ull}
+	{2050000000llu, 3850000000llu},
+	{3350000000llu, 7250000000llu},
+	{7000000000, 13000000000},
+	{12550000000, 18500000000}
 };
 
 static const struct regmap_config admv8818_regmap_config = {
@@ -94,9 +106,11 @@ static int admv8818_rfin_band_select(struct admv8818_dev *dev)
 	u64 freq_step;
 	int ret;
 
-	u64 rate = clk_get_rate(dev->clkin);
+	unsigned long long rate = dev->clkin_freq;
 
-	if (rate < freq_range_hpf[0][0] || rate > freq_range_lpf[3][3]) {
+	pr_info("rate=%llu", rate);
+
+	if (rate < freq_range_hpf[0][0] || rate > freq_range_lpf[3][1]) {
 		hpf_band = 0;
 		lpf_band = 0;
 		hpf_step = 0;
@@ -105,39 +119,50 @@ static int admv8818_rfin_band_select(struct admv8818_dev *dev)
 	}
 
 	for (i = 0; i < 4; i++) {
-		if (rate > freq_range_hpf[i][0] && rate <freq_range_hpf[i][0]) {
+		if ((rate > freq_range_hpf[i][0]) && rate < freq_range_hpf[i][1]) {
 			hpf_band = i + 1;
-			freq_step = (freq_range_hpf[i][0] - freq_range_hpf[i][0]) / 16;
+			freq_step = div_u64((freq_range_hpf[i][1] - freq_range_hpf[i][0]), 15);
 
 			for (j = 0; j < 16; j++)
-				if(rate < (freq_range_hpf[i][0] + (freq_step * j)))
+				if(rate < (freq_range_hpf[i][0] + (freq_step * j))) {
 					hpf_step = j - 1;
+					break;
+				}
+			break;
 		}
 	}
 
 	for (i = 0; i < 4; i++) {
-		if (rate > freq_range_lpf[i][0] && rate <freq_range_lpf[i][0]) {
+		if ((rate > freq_range_lpf[i][0]) && rate < freq_range_lpf[i][1]) {
 			lpf_band = i + 1;
-			freq_step = (freq_range_lpf[i][0] - freq_range_lpf[i][0]) / 16;
+			freq_step = div_u64((freq_range_lpf[i][1] - freq_range_lpf[i][0]), 15);
 
 			for (j = 0; j < 16; j++)
-				if(rate < (freq_range_lpf[i][0] + (freq_step * j)))
+				if(rate < (freq_range_lpf[i][0] + (freq_step * j))) {
 					lpf_step = j;
+					break;
+				}
+			break;
 		}
 	}
 
-reg_write:
-	ret = regmap_write(dev->regmap, ADMV8818_REG_WR0_FILTER,
-				FIELD_PREP(ADMV8818_HPF_WR0_MSK, hpf_step) |
-				FIELD_PREP(ADMV8818_LPF_WR0_MSK, lpf_step));
-	if (ret)
-		return ret;
+	pr_info("hpf_band=%u", hpf_band);
+	pr_info("lpf_band=%u", lpf_band);
+	pr_info("hpf_step=%u", hpf_step);
+	pr_info("lpf_step=%u", lpf_step);
 
-	return regmap_write(dev->regmap, ADMV8818_REG_WR0_SW,
+reg_write:
+	ret = regmap_write(dev->regmap, ADMV8818_REG_WR0_SW,
 				FIELD_PREP(ADMV8818_SW_IN_SET_WR0_MSK, 1) |
 				FIELD_PREP(ADMV8818_SW_OUT_SET_WR0_MSK, 1) |
 				FIELD_PREP(ADMV8818_SW_IN_WR0_MSK, hpf_band) |
 				FIELD_PREP(ADMV8818_SW_OUT_WR0_MSK, lpf_band));
+	if (ret)
+		return ret;
+
+	return regmap_write(dev->regmap, ADMV8818_REG_WR0_FILTER,
+				FIELD_PREP(ADMV8818_HPF_WR0_MSK, hpf_step) |
+				FIELD_PREP(ADMV8818_LPF_WR0_MSK, lpf_step));
 }
 
 static int admv8818_read_raw(struct iio_dev *indio_dev,
@@ -204,9 +229,75 @@ static const struct iio_chan_spec admv8818_channels[] = {
 	ADMV8818_CHAN(0),
 };
 
+static int admv8818_freq_change(struct notifier_block *nb, unsigned long action, void *data)
+{
+	struct admv8818_dev *dev = container_of(nb, struct admv8818_dev, nb);
+	struct clk_notifier_data *cnd = data;
+
+	if (action == POST_RATE_CHANGE) {
+		/* cache the new rate */
+		dev->clkin_freq = clk_get_rate_scaled(cnd->clk, &dev->clkscale);
+
+		return notifier_from_errno(admv8818_rfin_band_select(dev));
+	}
+
+	return NOTIFY_OK;
+}
+
+static void admv8818_clk_notifier_unreg(void *data)
+{
+	struct admv8818_dev *dev = data;
+
+	clk_notifier_unregister(dev->clkin, &dev->nb);
+}
+
 static void admv8818_clk_disable(void *data)
 {
 	clk_disable_unprepare(data);
+}
+
+static int admv8818_init(struct admv8818_dev *dev)
+{
+	int ret;
+	struct spi_device *spi = dev->spi;
+	unsigned int chip_id;
+
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_SPI_CONFIG_A,
+					ADMV8818_SOFTRESET_N_MSK |
+					ADMV8818_SOFTRESET_MSK,
+					FIELD_PREP(ADMV8818_SOFTRESET_N_MSK, 1) |
+					FIELD_PREP(ADMV8818_SOFTRESET_MSK, 1));
+	if (ret) {
+		dev_err(&spi->dev, "ADMV8818 Soft Reset failed.\n");
+		return ret;
+	}
+	
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_SPI_CONFIG_A,
+					ADMV8818_SDOACTIVE_N_MSK |
+					ADMV8818_SDOACTIVE_MSK,
+					FIELD_PREP(ADMV8818_SDOACTIVE_N_MSK, 1) |
+					FIELD_PREP(ADMV8818_SDOACTIVE_MSK, 1));
+	if (ret) {
+		dev_err(&spi->dev, "ADMV8818 SDO Enable failed.\n");
+		return ret;
+	}
+
+	ret = regmap_read(dev->regmap, ADMV8818_REG_CHIPTYPE, &chip_id);
+	if (ret) {
+		dev_err(&spi->dev, "ADMV8818 Chip ID read failed.\n");
+		return ret;
+	}
+
+	if(chip_id != 0x1) {
+		dev_err(&spi->dev, "ADMV8818 Invalid Chip ID.\n");
+		return -EINVAL;
+	}
+
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_SPI_CONFIG_B,
+					ADMV8818_SINGLE_INSTRUCTION_MSK,
+					FIELD_PREP(ADMV8818_SINGLE_INSTRUCTION_MSK, 1));
+
+	return admv8818_rfin_band_select(dev);
 }
 
 static int admv8818_probe(struct spi_device *spi)
@@ -233,9 +324,15 @@ static int admv8818_probe(struct spi_device *spi)
 	indio_dev->channels = admv8818_channels;
 	indio_dev->num_channels = ARRAY_SIZE(admv8818_channels);
 
+	dev->spi = spi;
+
 	dev->clkin = devm_clk_get(&spi->dev, "rf_in");
 	if (IS_ERR(dev->clkin))
 		return PTR_ERR(dev->clkin);
+	
+	ret = of_clk_get_scale(spi->dev.of_node, NULL, &dev->clkscale);
+	if (ret)
+		return ret;
 
 	ret = clk_prepare_enable(dev->clkin);
 	if (ret)
@@ -244,10 +341,21 @@ static int admv8818_probe(struct spi_device *spi)
 	ret = devm_add_action_or_reset(&spi->dev, admv8818_clk_disable, dev->clkin);
 	if (ret)
 		return ret;
-	
-	// ret = admv8818_rfin_band_select(dev);
-	// if (ret)
-	// 	return ret;
+
+	dev->clkin_freq = clk_get_rate_scaled(dev->clkin, &dev->clkscale);
+
+	dev->nb.notifier_call = admv8818_freq_change;
+	ret = clk_notifier_register(dev->clkin, &dev->nb);
+	if (ret < 0)
+		return ret;
+
+	ret = devm_add_action_or_reset(&spi->dev, admv8818_clk_notifier_unreg, dev);
+	if (ret < 0)
+		return ret;
+
+	ret = admv8818_init(dev);
+	if (ret)
+		return ret;
 
 	return devm_iio_device_register(&spi->dev, indio_dev);
 }
