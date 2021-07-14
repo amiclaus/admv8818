@@ -42,6 +42,7 @@
 				reg = <0>;
 				spi-max-frequency = <10000000>;
 				clocks = <&admv8818_rfin>;
+				clock-scales = <1 50>;
 				clock-names = "rf_in";
 			};
 		};
