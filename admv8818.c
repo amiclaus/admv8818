@@ -76,6 +76,7 @@ struct admv8818_dev {
 	struct clk		*clkin;
 	struct clock_scale	clkscale;
 	struct notifier_block	nb;
+	unsigned int		freq_scale;
 	u64			clkin_freq;
 };
 
@@ -102,22 +103,19 @@ static const struct regmap_config admv8818_regmap_config = {
 
 static int admv8818_hpf_select(struct admv8818_dev *dev, u64 freq)
 {
-	unsigned int hpf_step, hpf_band, i, j;
+	unsigned int hpf_step = 0, hpf_band = 0, i, j;
 	u64 freq_step;
 	int ret;
 
-	if (freq < freq_range_hpf[0][0] || freq > freq_range_hpf[3][1]) {
-		hpf_band = 0;
-		hpf_step = 0;
+	if (freq < freq_range_hpf[0][0] || freq > freq_range_hpf[3][1])
 		goto hpf_write;
-	}
 
 	for (i = 0; i < 4; i++) {
 		if ((freq > freq_range_hpf[i][0]) && freq < freq_range_hpf[i][1]) {
 			hpf_band = i + 1;
 			freq_step = div_u64((freq_range_hpf[i][1] - freq_range_hpf[i][0]), 15);
 
-			for (j = 0; j < 16; j++)
+			for (j = 1; j < 16; j++)
 				if (freq < (freq_range_hpf[i][0] + (freq_step * j))) {
 					hpf_step = j - 1;
 					break;
@@ -125,7 +123,6 @@ static int admv8818_hpf_select(struct admv8818_dev *dev, u64 freq)
 			break;
 		}
 	}
-
 
 hpf_write:
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_SW,
@@ -143,22 +140,19 @@ hpf_write:
 
 static int admv8818_lpf_select(struct admv8818_dev *dev, u64 freq)
 {
-	unsigned int lpf_step, lpf_band, i, j;
+	unsigned int lpf_step = 0, lpf_band = 0, i, j;
 	u64 freq_step;
 	int ret;
 
-	if (freq < freq_range_lpf[0][0] || freq > freq_range_lpf[3][1]) {
-		lpf_band = 0;
-		lpf_step = 0;
+	if (freq < freq_range_lpf[0][0] || freq > freq_range_lpf[3][1])
 		goto lpf_write;
-	}
 
 	for (i = 0; i < 4; i++) {
 		if ((freq > freq_range_lpf[i][0]) && freq < freq_range_lpf[i][1]) {
 			lpf_band = i + 1;
 			freq_step = div_u64((freq_range_lpf[i][1] - freq_range_lpf[i][0]), 15);
 
-			for (j = 0; j < 16; j++)
+			for (j = 1; j < 16; j++)
 				if (freq < (freq_range_lpf[i][0] + (freq_step * j))) {
 					lpf_step = j;
 					break;
@@ -166,6 +160,7 @@ static int admv8818_lpf_select(struct admv8818_dev *dev, u64 freq)
 			break;
 		}
 	}
+
 lpf_write:
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_SW,
 				ADMV8818_SW_OUT_SET_WR0_MSK |
@@ -201,6 +196,12 @@ static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_fr
 		return ret;
 
 	hpf_band = FIELD_GET(ADMV8818_SW_IN_WR0_MSK, data);
+	if (!hpf_band) {
+		*hpf_freq = 0;
+
+		return 0;
+	}
+
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
 	if (ret)
@@ -208,8 +209,8 @@ static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_fr
 
 	hpf_state = FIELD_GET(ADMV8818_HPF_WR0_MSK, data);
 
-	*hpf_freq = div_u64((freq_range_hpf[hpf_band-1][1] - freq_range_hpf[hpf_band-1][0]), (1000000 * 15));
-	*hpf_freq = div_u64(freq_range_hpf[hpf_band-1][0], 1000000) + (*hpf_freq * hpf_state);
+	*hpf_freq = div_u64((freq_range_hpf[hpf_band-1][1] - freq_range_hpf[hpf_band-1][0]), (dev->freq_scale * 15));
+	*hpf_freq = div_u64(freq_range_hpf[hpf_band-1][0], dev->freq_scale) + (*hpf_freq * hpf_state);
 
 	return 0;
 }
@@ -225,6 +226,11 @@ static int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned int *lpf_fr
 		return ret;
 
 	lpf_band = FIELD_GET(ADMV8818_SW_OUT_WR0_MSK, data);
+	if (!lpf_band) {
+		*lpf_freq = 0;
+
+		return 0;
+	}
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
 	if (ret)
@@ -232,8 +238,8 @@ static int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned int *lpf_fr
 
 	lpf_state = FIELD_GET(ADMV8818_LPF_WR0_MSK, data);
 
-	*lpf_freq = div_u64((freq_range_lpf[lpf_band-1][1] - freq_range_lpf[lpf_band-1][0]), (1000000 * 15));
-	*lpf_freq = div_u64(freq_range_lpf[lpf_band-1][0], 1000000) + (*lpf_freq * lpf_state);
+	*lpf_freq = div_u64((freq_range_lpf[lpf_band-1][1] - freq_range_lpf[lpf_band-1][0]), (dev->freq_scale * 15));
+	*lpf_freq = div_u64(freq_range_lpf[lpf_band-1][0], dev->freq_scale) + (*lpf_freq * lpf_state);
 
 	return 0;
 }
@@ -243,13 +249,17 @@ static int admv8818_write_raw(struct iio_dev *indio_dev,
 			     int val, int val2, long info)
 {
 	struct admv8818_dev *dev = iio_priv(indio_dev);
-	u64 freq = (u64)val * 1000000;
+	u64 freq = (u64)val * dev->freq_scale;
 
 	switch (info) {
 	case IIO_CHAN_INFO_LOW_PASS_FILTER_3DB_FREQUENCY:
 		return admv8818_lpf_select(dev, freq);
 	case IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY:
 		return admv8818_hpf_select(dev, freq);
+	case IIO_CHAN_INFO_SCALE:
+		dev->freq_scale = val;
+
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -273,6 +283,10 @@ static int admv8818_read_raw(struct iio_dev *indio_dev,
 		ret = admv8818_read_hpf_freq(dev, val);
 		if (ret)
 			return ret;
+
+		return IIO_VAL_INT;
+	case IIO_CHAN_INFO_SCALE:
+		*val = dev->freq_scale;
 
 		return IIO_VAL_INT;
 	default:
@@ -306,7 +320,8 @@ static const struct iio_info admv8818_info = {
 	.channel = _channel,					\
 	.info_mask_separate =					\
 		BIT(IIO_CHAN_INFO_LOW_PASS_FILTER_3DB_FREQUENCY) | \
-		BIT(IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY) \
+		BIT(IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY) | \
+		BIT(IIO_CHAN_INFO_SCALE) \
 }
 
 static const struct iio_chan_spec admv8818_channels[] = {
@@ -345,6 +360,8 @@ static int admv8818_init(struct admv8818_dev *dev)
 	int ret;
 	struct spi_device *spi = dev->spi;
 	unsigned int chip_id;
+
+	dev->freq_scale = 1000000;
 
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_SPI_CONFIG_A,
 					ADMV8818_SOFTRESET_N_MSK |
