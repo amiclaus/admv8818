@@ -434,6 +434,9 @@ static int admv8818_probe(struct spi_device *spi)
 	if (!(dev->clkin))
 		goto exit_clk;
 
+	if (IS_ERR(dev->clkin))
+		return PTR_ERR(dev->clkin);
+
 	ret = of_clk_get_scale(spi->dev.of_node, NULL, &dev->clkscale);
 	if (ret)
 		return ret;
