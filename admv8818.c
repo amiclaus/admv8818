@@ -202,7 +202,6 @@ static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_fr
 		return 0;
 	}
 
-
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
 	if (ret)
 		return ret;
