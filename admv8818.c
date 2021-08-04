@@ -14,6 +14,7 @@
 #include <linux/device.h>
 #include <linux/iio/iio.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/notifier.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
@@ -76,20 +77,21 @@ struct admv8818_dev {
 	struct clk		*clkin;
 	struct clock_scale	clkscale;
 	struct notifier_block	nb;
+	struct mutex		lock;
 	unsigned int		freq_scale;
 	u64			clkin_freq;
 };
 
 unsigned long long freq_range_hpf[4][2] = {
-	{1750000000llu, 3550000000llu},
-	{3400000000llu, 7250000000llu},
+	{1750000000ULL, 3550000000ULL},
+	{3400000000ULL, 7250000000ULL},
 	{6600000000, 12000000000},
 	{12500000000, 19900000000}
 };
 
 unsigned long long freq_range_lpf[4][2] = {
-	{2050000000llu, 3850000000llu},
-	{3350000000llu, 7250000000llu},
+	{2050000000ULL, 3850000000ULL},
+	{3350000000ULL, 7250000000ULL},
 	{7000000000, 13000000000},
 	{12550000000, 18500000000}
 };
@@ -126,17 +128,24 @@ static int admv8818_hpf_select(struct admv8818_dev *dev, u64 freq)
 	}
 
 hpf_write:
+	mutex_lock(&dev->lock);
+
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_SW,
 				ADMV8818_SW_IN_SET_WR0_MSK |
 				ADMV8818_SW_IN_WR0_MSK,
 				FIELD_PREP(ADMV8818_SW_IN_SET_WR0_MSK, 1) |
 				FIELD_PREP(ADMV8818_SW_IN_WR0_MSK, hpf_band));
 	if (ret)
-		return ret;
+		goto exit;
 
-	return regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_FILTER,
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_FILTER,
 				ADMV8818_HPF_WR0_MSK,
 				FIELD_PREP(ADMV8818_HPF_WR0_MSK, hpf_step));
+
+exit:
+	mutex_unlock(&dev->lock);
+
+	return ret;
 }
 
 static int admv8818_lpf_select(struct admv8818_dev *dev, u64 freq)
@@ -164,17 +173,23 @@ static int admv8818_lpf_select(struct admv8818_dev *dev, u64 freq)
 	}
 
 lpf_write:
+	mutex_lock(&dev->lock);
+
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_SW,
 				ADMV8818_SW_OUT_SET_WR0_MSK |
 				ADMV8818_SW_OUT_WR0_MSK,
 				FIELD_PREP(ADMV8818_SW_OUT_SET_WR0_MSK, 1) |
 				FIELD_PREP(ADMV8818_SW_OUT_WR0_MSK, lpf_band));
 	if (ret)
-		return ret;
+		goto exit;
 
-	return regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_FILTER,
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_FILTER,
 				ADMV8818_LPF_WR0_MSK,
 				FIELD_PREP(ADMV8818_LPF_WR0_MSK, lpf_step));
+exit:
+	mutex_unlock(&dev->lock);
+
+	return ret;
 }
 
 static int admv8818_rfin_band_select(struct admv8818_dev *dev)
@@ -193,6 +208,8 @@ static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_fr
 	unsigned int data, hpf_band, hpf_state;
 	int ret;
 
+	mutex_lock(&dev->lock);
+
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_SW, &data);
 	if (ret)
 		return ret;
@@ -206,14 +223,17 @@ static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_fr
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
 	if (ret)
-		return ret;
+		goto exit;
 
 	hpf_state = FIELD_GET(ADMV8818_HPF_WR0_MSK, data);
 
-	*hpf_freq = div_u64((freq_range_hpf[hpf_band-1][1] - freq_range_hpf[hpf_band-1][0]), (dev->freq_scale * 15));
+	*hpf_freq = div_u64(freq_range_hpf[hpf_band-1][1] - freq_range_hpf[hpf_band-1][0], dev->freq_scale * 15);
 	*hpf_freq = div_u64(freq_range_hpf[hpf_band-1][0], dev->freq_scale) + (*hpf_freq * hpf_state);
 
-	return 0;
+exit:
+	mutex_unlock(&dev->lock);
+
+	return ret;
 }
 
 
@@ -222,6 +242,8 @@ static int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned int *lpf_fr
 	unsigned int data, lpf_band, lpf_state;
 	int ret;
 
+	mutex_lock(&dev->lock);
+
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_SW, &data);
 	if (ret)
 		return ret;
@@ -229,20 +251,22 @@ static int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned int *lpf_fr
 	lpf_band = FIELD_GET(ADMV8818_SW_OUT_WR0_MSK, data);
 	if (!lpf_band) {
 		*lpf_freq = 0;
-
 		return 0;
 	}
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
 	if (ret)
-		return ret;
+		goto exit;
 
 	lpf_state = FIELD_GET(ADMV8818_LPF_WR0_MSK, data);
 
-	*lpf_freq = div_u64((freq_range_lpf[lpf_band-1][1] - freq_range_lpf[lpf_band-1][0]), (dev->freq_scale * 15));
+	*lpf_freq = div_u64(freq_range_lpf[lpf_band-1][1] - freq_range_lpf[lpf_band-1][0], dev->freq_scale * 15);
 	*lpf_freq = div_u64(freq_range_lpf[lpf_band-1][0], dev->freq_scale) + (*lpf_freq * lpf_state);
 
-	return 0;
+exit:
+	mutex_unlock(&dev->lock);
+
+	return ret;
 }
 
 static int admv8818_write_raw(struct iio_dev *indio_dev,
@@ -259,7 +283,6 @@ static int admv8818_write_raw(struct iio_dev *indio_dev,
 		return admv8818_hpf_select(dev, freq);
 	case IIO_CHAN_INFO_SCALE:
 		dev->freq_scale = val;
-
 		return 0;
 	default:
 		return -EINVAL;
@@ -288,7 +311,6 @@ static int admv8818_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		*val = dev->freq_scale;
-
 		return IIO_VAL_INT;
 	default:
 		return -EINVAL;
@@ -409,6 +431,37 @@ static int admv8818_init(struct admv8818_dev *dev)
 		return 0;
 }
 
+static int admv8818_clk_setup(struct admv8818_dev *dev)
+{
+	struct spi_device *spi = dev->spi;
+	int ret;
+
+	dev->clkin = devm_clk_get_optional(&spi->dev, "rf_in");
+	if (IS_ERR(dev->clkin))
+		return PTR_ERR(dev->clkin);
+	else if (!dev->clkin)
+		return 0;
+
+	ret = of_clk_get_scale(spi->dev.of_node, NULL, &dev->clkscale);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(dev->clkin);
+
+	ret = devm_add_action_or_reset(&spi->dev, admv8818_clk_disable, dev->clkin);
+	if (ret)
+		return ret;
+
+	dev->clkin_freq = clk_get_rate_scaled(dev->clkin, &dev->clkscale);
+
+	dev->nb.notifier_call = admv8818_freq_change;
+	ret = clk_notifier_register(dev->clkin, &dev->nb);
+	if (ret < 0)
+		return ret;
+
+	return devm_add_action_or_reset(&spi->dev, admv8818_clk_notifier_unreg, dev);
+}
+
 static int admv8818_probe(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev;
@@ -435,37 +488,12 @@ static int admv8818_probe(struct spi_device *spi)
 
 	dev->spi = spi;
 
-	dev->clkin = devm_clk_get_optional(&spi->dev, "rf_in");
-	if (!(dev->clkin))
-		goto exit_clk;
-
-	if (IS_ERR(dev->clkin))
-		return PTR_ERR(dev->clkin);
-
-	ret = of_clk_get_scale(spi->dev.of_node, NULL, &dev->clkscale);
+	ret = admv8818_clk_setup(dev);
 	if (ret)
 		return ret;
 
-	ret = clk_prepare_enable(dev->clkin);
-	if (ret)
-		return ret;
+	mutex_init(&dev->lock);
 
-	ret = devm_add_action_or_reset(&spi->dev, admv8818_clk_disable, dev->clkin);
-	if (ret)
-		return ret;
-
-	dev->clkin_freq = clk_get_rate_scaled(dev->clkin, &dev->clkscale);
-
-	dev->nb.notifier_call = admv8818_freq_change;
-	ret = clk_notifier_register(dev->clkin, &dev->nb);
-	if (ret < 0)
-		return ret;
-
-	ret = devm_add_action_or_reset(&spi->dev, admv8818_clk_notifier_unreg, dev);
-	if (ret < 0)
-		return ret;
-
-exit_clk:
 	ret = admv8818_init(dev);
 	if (ret)
 		return ret;
