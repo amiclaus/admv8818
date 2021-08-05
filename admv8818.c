@@ -336,7 +336,7 @@ static const struct iio_info admv8818_info = {
 };
 
 #define ADMV8818_CHAN(_channel) {				\
-	.type = IIO_VOLTAGE,					\
+	.type = IIO_ALTVOLTAGE,					\
 	.output = 1,						\
 	.indexed = 1,						\
 	.channel = _channel,					\
