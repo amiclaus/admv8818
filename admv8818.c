@@ -212,13 +212,12 @@ static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_fr
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_SW, &data);
 	if (ret)
-		return ret;
+		goto exit;
 
 	hpf_band = FIELD_GET(ADMV8818_SW_IN_WR0_MSK, data);
 	if (!hpf_band) {
 		*hpf_freq = 0;
-
-		return 0;
+		goto exit;
 	}
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
@@ -246,12 +245,12 @@ static int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned int *lpf_fr
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_SW, &data);
 	if (ret)
-		return ret;
+		goto exit;
 
 	lpf_band = FIELD_GET(ADMV8818_SW_OUT_WR0_MSK, data);
 	if (!lpf_band) {
 		*lpf_freq = 0;
-		return 0;
+		goto exit;
 	}
 
 	ret = regmap_read(dev->regmap, ADMV8818_REG_WR0_FILTER, &data);
