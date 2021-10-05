@@ -71,6 +71,11 @@
 #define ADMV8818_HPF_WR0_MSK			GENMASK(7, 4)
 #define ADMV8818_LPF_WR0_MSK			GENMASK(3, 0)
 
+enum {
+	ADMV8818_BW_FREQ,
+	ADMV8818_CENTER_FREQ
+};
+
 struct admv8818_dev {
 	struct spi_device	*spi;
 	struct regmap		*regmap;
@@ -79,6 +84,9 @@ struct admv8818_dev {
 	struct notifier_block	nb;
 	struct mutex		lock;
 	unsigned int		freq_scale;
+	unsigned int		filter_mode;
+	unsigned int		center_freq;
+	unsigned int		bw_freq;
 	u64			clkin_freq;
 	u32			tolerance;
 };
@@ -102,6 +110,12 @@ static const struct regmap_config admv8818_regmap_config = {
 	.val_bits = 8,
 	.read_flag_mask = 0x80,
 	.max_register = 0x1FF,
+};
+
+static const char * const admv8818_modes[] = {
+	[0] = "auto",
+	[1] = "bypass",
+	[2] = "manual"
 };
 
 static int admv8818_hpf_select(struct admv8818_dev *dev, u64 freq)
@@ -209,6 +223,35 @@ lpf_write:
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_FILTER,
 				ADMV8818_LPF_WR0_MSK,
 				FIELD_PREP(ADMV8818_LPF_WR0_MSK, lpf_step));
+exit:
+	mutex_unlock(&dev->lock);
+
+	return ret;
+}
+
+static int admv8818_filter_bypass(struct admv8818_dev *dev)
+{
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_SW,
+				ADMV8818_SW_IN_SET_WR0_MSK |
+				ADMV8818_SW_IN_WR0_MSK |
+				ADMV8818_SW_OUT_SET_WR0_MSK |
+				ADMV8818_SW_OUT_WR0_MSK,
+				FIELD_PREP(ADMV8818_SW_IN_SET_WR0_MSK, 1) |
+				FIELD_PREP(ADMV8818_SW_IN_WR0_MSK, 0) |
+				FIELD_PREP(ADMV8818_SW_OUT_SET_WR0_MSK, 1) |
+				FIELD_PREP(ADMV8818_SW_OUT_WR0_MSK, 0));
+	if (ret)
+		goto exit;
+
+	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_WR0_FILTER,
+				ADMV8818_HPF_WR0_MSK |
+				ADMV8818_LPF_WR0_MSK,
+				FIELD_PREP(ADMV8818_HPF_WR0_MSK, 0) |
+				FIELD_PREP(ADMV8818_LPF_WR0_MSK, 0));
 exit:
 	mutex_unlock(&dev->lock);
 
@@ -354,10 +397,149 @@ static int admv8818_reg_access(struct iio_dev *indio_dev,
 		return regmap_write(dev->regmap, reg, write_val);
 }
 
+static ssize_t admv8818_read(struct iio_dev *indio_dev,
+			    uintptr_t private,
+			    const struct iio_chan_spec *chan,
+			    char *buf)
+{
+	struct admv8818_dev *dev = iio_priv(indio_dev);
+	unsigned int val, lpf_freq, hpf_freq;
+	int ret;
+
+	ret = admv8818_read_lpf_freq(dev, &lpf_freq);
+	if (ret)
+		return ret;
+
+	ret = admv8818_read_hpf_freq(dev, &hpf_freq);
+	if (ret)
+		return ret;
+
+	switch ((u32)private) {
+	case ADMV8818_BW_FREQ:
+		val = lpf_freq - hpf_freq;
+		break;
+	case ADMV8818_CENTER_FREQ:
+		val = lpf_freq - hpf_freq;
+		val = hpf_freq + val / 2;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return sprintf(buf, "%u\n", val);
+}
+
+static ssize_t admv8818_write(struct iio_dev *indio_dev,
+			     uintptr_t private,
+			     const struct iio_chan_spec *chan,
+			     const char *buf, size_t len)
+{
+	struct admv8818_dev *dev = iio_priv(indio_dev);
+	unsigned long long freq, freq_scaled, lpf_freq, hpf_freq;
+	int ret;
+
+	ret = kstrtoull(buf, 10, &freq);
+	if (ret)
+		return ret;
+
+	freq_scaled = freq * dev->freq_scale;
+
+	switch ((u32)private) {
+	case ADMV8818_BW_FREQ:
+		dev->bw_freq = freq;
+		hpf_freq = dev->center_freq * dev->freq_scale - div_u64(freq_scaled, 2);
+		lpf_freq = hpf_freq + freq_scaled;
+
+		break;
+	case ADMV8818_CENTER_FREQ:
+		dev->center_freq = freq;
+		hpf_freq = freq_scaled - div_u64(dev->bw_freq * dev->freq_scale, 2);
+		hpf_freq = hpf_freq + (dev->bw_freq * dev->freq_scale);
+
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	ret = admv8818_lpf_select(dev, lpf_freq);
+	if (ret)
+		return ret;
+
+	return admv8818_hpf_select(dev, hpf_freq);
+}
+
+static int admv8818_get_mode(struct iio_dev *indio_dev,
+				const struct iio_chan_spec *chan)
+{
+	struct admv8818_dev *dev = iio_priv(indio_dev);
+
+	return dev->filter_mode;
+}
+
+static int admv8818_set_mode(struct iio_dev *indio_dev,
+				   const struct iio_chan_spec *chan,
+				   unsigned int mode)
+{
+	struct admv8818_dev *dev = iio_priv(indio_dev);
+	int ret;
+
+	switch(mode) {
+	case 0:
+		ret = clk_notifier_register(dev->clkin, &dev->nb);
+		if (ret)
+			return ret;
+
+		break;
+	case 1:
+		clk_notifier_unregister(dev->clkin, &dev->nb);
+
+		ret = admv8818_filter_bypass(dev);
+		if (ret)
+			return ret;
+
+		break;
+	case 2:
+		clk_notifier_unregister(dev->clkin, &dev->nb);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	dev->filter_mode = mode;
+
+	return ret;
+}
+
 static const struct iio_info admv8818_info = {
 	.write_raw = admv8818_write_raw,
 	.read_raw = admv8818_read_raw,
 	.debugfs_reg_access = &admv8818_reg_access,
+};
+
+#define _ADMV8818_EXT_INFO(_name, _shared, _ident) { \
+		.name = _name, \
+		.read = admv8818_read, \
+		.write = admv8818_write, \
+		.private = _ident, \
+		.shared = _shared, \
+}
+
+static const struct iio_enum admv8818_mode_enum = {
+	.items = admv8818_modes,
+	.num_items = ARRAY_SIZE(admv8818_modes),
+	.get = admv8818_get_mode,
+	.set = admv8818_set_mode,
+};
+
+static const struct iio_chan_spec_ext_info admv8818_ext_info[] = {
+	_ADMV8818_EXT_INFO("filter_band_pass_bandwith_3db_frequency", IIO_SEPARATE,
+		ADMV8818_BW_FREQ),
+	_ADMV8818_EXT_INFO("filter_band_pass_center_frequency", IIO_SEPARATE,
+		ADMV8818_CENTER_FREQ),
+	IIO_ENUM("mode", IIO_SEPARATE, &admv8818_mode_enum),
+	IIO_ENUM_AVAILABLE_SHARED("mode", IIO_SEPARATE,
+		&admv8818_mode_enum),
+	{ },
 };
 
 #define ADMV8818_CHAN(_channel) {				\
@@ -371,8 +553,17 @@ static const struct iio_info admv8818_info = {
 		BIT(IIO_CHAN_INFO_SCALE) \
 }
 
+#define ADMV8818_CHAN_BP(_channel, _admv8818_ext_info) {	\
+	.type = IIO_ALTVOLTAGE,					\
+	.output = 1,						\
+	.indexed = 1,						\
+	.channel = _channel,					\
+	.ext_info = _admv8818_ext_info,				\
+}
+
 static const struct iio_chan_spec admv8818_channels[] = {
 	ADMV8818_CHAN(0),
+	ADMV8818_CHAN_BP(0, admv8818_ext_info),
 };
 
 static int admv8818_freq_change(struct notifier_block *nb, unsigned long action, void *data)
