@@ -262,13 +262,19 @@ static int admv8818_rfin_band_select(struct admv8818_dev *dev)
 {
 	int ret;
 
-	ret = admv8818_hpf_select(dev, DIV_ROUND_DOWN_ULL(
-		dev->clkin_freq * (100 - dev->tolerance), 100));
+	dev->center_freq = div_u64(dev->clkin_freq, dev->freq_scale);
+
+	if (dev->tolerance)
+		dev->bw_freq = DIV_ROUND_UP_ULL(dev->clkin_freq * (100 + dev->tolerance), 100 * dev->freq_scale) -
+			DIV_ROUND_DOWN_ULL(dev->clkin_freq * (100 - dev->tolerance), 100 * dev->freq_scale);
+	else
+		dev->bw_freq = 0;
+
+	ret = admv8818_hpf_select(dev, (dev->center_freq - dev->bw_freq) * dev->freq_scale);
 	if (ret)
 		return ret;
 
-	return admv8818_lpf_select(dev, DIV_ROUND_UP_ULL(
-		dev->clkin_freq * (100 + dev->tolerance), 100));
+	return admv8818_lpf_select(dev, (dev->center_freq + dev->bw_freq) * dev->freq_scale);
 }
 
 static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_freq)
@@ -417,10 +423,11 @@ static ssize_t admv8818_read(struct iio_dev *indio_dev,
 	switch ((u32)private) {
 	case ADMV8818_BW_FREQ:
 		val = lpf_freq - hpf_freq;
+
 		break;
 	case ADMV8818_CENTER_FREQ:
-		val = lpf_freq - hpf_freq;
-		val = hpf_freq + val / 2;
+		val = hpf_freq + (lpf_freq - hpf_freq) / 2;
+
 		break;
 	default:
 		return -EINVAL;
@@ -454,7 +461,7 @@ static ssize_t admv8818_write(struct iio_dev *indio_dev,
 	case ADMV8818_CENTER_FREQ:
 		dev->center_freq = freq;
 		hpf_freq = freq_scaled - div_u64(dev->bw_freq * dev->freq_scale, 2);
-		hpf_freq = hpf_freq + (dev->bw_freq * dev->freq_scale);
+		lpf_freq = hpf_freq + (dev->bw_freq * dev->freq_scale);
 
 		break;
 	default:
@@ -465,7 +472,9 @@ static ssize_t admv8818_write(struct iio_dev *indio_dev,
 	if (ret)
 		return ret;
 
-	return admv8818_hpf_select(dev, hpf_freq);
+	ret = admv8818_hpf_select(dev, hpf_freq);
+
+	return ret ? ret : len;
 }
 
 static int admv8818_get_mode(struct iio_dev *indio_dev,
@@ -481,17 +490,31 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 				   unsigned int mode)
 {
 	struct admv8818_dev *dev = iio_priv(indio_dev);
-	int ret;
+	int ret = 0;
 
-	switch(mode) {
+	switch (mode) {
 	case 0:
-		ret = clk_notifier_register(dev->clkin, &dev->nb);
-		if (ret)
+		if (dev->filter_mode && dev->clkin) {
+			ret = clk_prepare_enable(dev->clkin);
+			if (ret)
+				return ret;
+
+			ret = clk_notifier_register(dev->clkin, &dev->nb);
+			if (ret)
+				return ret;
+		} else {
 			return ret;
+		}
 
 		break;
 	case 1:
-		clk_notifier_unregister(dev->clkin, &dev->nb);
+		if (dev->filter_mode == 0 && dev->clkin) {
+			clk_disable_unprepare(dev->clkin);
+
+			ret = clk_notifier_unregister(dev->clkin, &dev->nb);
+			if (ret)
+				return ret;
+		}
 
 		ret = admv8818_filter_bypass(dev);
 		if (ret)
@@ -499,7 +522,16 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 
 		break;
 	case 2:
-		clk_notifier_unregister(dev->clkin, &dev->nb);
+		if (dev->filter_mode == 0 && dev->clkin) {
+			clk_disable_unprepare(dev->clkin);
+
+			ret = clk_notifier_unregister(dev->clkin, &dev->nb);
+			if (ret)
+				return ret;
+		} else {
+			return ret;
+		}
+
 		break;
 	default:
 		return -EINVAL;
@@ -532,7 +564,7 @@ static const struct iio_enum admv8818_mode_enum = {
 };
 
 static const struct iio_chan_spec_ext_info admv8818_ext_info[] = {
-	_ADMV8818_EXT_INFO("filter_band_pass_bandwith_3db_frequency", IIO_SEPARATE,
+	_ADMV8818_EXT_INFO("filter_band_pass_bandwidth_3db_frequency", IIO_SEPARATE,
 		ADMV8818_BW_FREQ),
 	_ADMV8818_EXT_INFO("filter_band_pass_center_frequency", IIO_SEPARATE,
 		ADMV8818_CENTER_FREQ),
@@ -553,7 +585,7 @@ static const struct iio_chan_spec_ext_info admv8818_ext_info[] = {
 		BIT(IIO_CHAN_INFO_SCALE) \
 }
 
-#define ADMV8818_CHAN_BP(_channel, _admv8818_ext_info) {	\
+#define ADMV8818_CHAN_BW_CF(_channel, _admv8818_ext_info) {	\
 	.type = IIO_ALTVOLTAGE,					\
 	.output = 1,						\
 	.indexed = 1,						\
@@ -563,7 +595,7 @@ static const struct iio_chan_spec_ext_info admv8818_ext_info[] = {
 
 static const struct iio_chan_spec admv8818_channels[] = {
 	ADMV8818_CHAN(0),
-	ADMV8818_CHAN_BP(0, admv8818_ext_info),
+	ADMV8818_CHAN_BW_CF(0, admv8818_ext_info),
 };
 
 static int admv8818_freq_change(struct notifier_block *nb, unsigned long action, void *data)
