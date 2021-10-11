@@ -87,8 +87,8 @@ struct admv8818_dev {
 	unsigned int		filter_mode;
 	unsigned int		center_freq;
 	unsigned int		bw_freq;
+	u64			bw_hz;
 	u64			clkin_freq;
-	u32			tolerance;
 };
 
 static const unsigned long long freq_range_hpf[4][2] = {
@@ -261,20 +261,23 @@ exit:
 static int admv8818_rfin_band_select(struct admv8818_dev *dev)
 {
 	int ret;
+	u64 lpf, hpf;
 
 	dev->center_freq = div_u64(dev->clkin_freq, dev->freq_scale);
 
-	if (dev->tolerance)
-		dev->bw_freq = DIV_ROUND_UP_ULL(dev->clkin_freq * (100 + dev->tolerance), 100 * dev->freq_scale) -
-			DIV_ROUND_DOWN_ULL(dev->clkin_freq * (100 - dev->tolerance), 100 * dev->freq_scale);
-	else
-		dev->bw_freq = 0;
+	if (!dev->bw_freq) {
+		lpf = dev->clkin_freq;
+		hpf = dev->clkin_freq;
+	} else {
+		lpf = dev->clkin_freq + div_u64(dev->bw_freq * dev->freq_scale, 2);
+		hpf = dev->clkin_freq - div_u64(dev->bw_freq * dev->freq_scale, 2);
+	}
 
-	ret = admv8818_hpf_select(dev, (dev->center_freq - dev->bw_freq) * dev->freq_scale);
+	ret = admv8818_hpf_select(dev, hpf);
 	if (ret)
 		return ret;
 
-	return admv8818_lpf_select(dev, (dev->center_freq + dev->bw_freq) * dev->freq_scale);
+	return admv8818_lpf_select(dev, lpf);
 }
 
 static int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_freq)
@@ -637,8 +640,6 @@ static int admv8818_init(struct admv8818_dev *dev)
 	struct spi_device *spi = dev->spi;
 	unsigned int chip_id;
 
-	dev->freq_scale = 1000000;
-
 	ret = regmap_update_bits(dev->regmap, ADMV8818_REG_SPI_CONFIG_A,
 					ADMV8818_SOFTRESET_N_MSK |
 					ADMV8818_SOFTRESET_MSK,
@@ -699,10 +700,15 @@ static int admv8818_clk_setup(struct admv8818_dev *dev)
 	if (ret)
 		return ret;
 
-	of_property_read_u32(spi->dev.of_node,
-		"adi,tolerance-percent", &dev->tolerance);
+	of_property_read_u64(spi->dev.of_node,
+			"adi,bw-hz", &dev->bw_hz);
 
-	dev->tolerance = clamp(dev->tolerance, 0U, 50U);
+	/* Initial frequency scale */
+	dev->freq_scale = 1000000;
+
+	/* Scale the initial BW dt attribute */
+	if (dev->bw_hz)
+		dev->bw_freq = div_u64(dev->bw_hz, dev->freq_scale);
 
 	ret = clk_prepare_enable(dev->clkin);
 
