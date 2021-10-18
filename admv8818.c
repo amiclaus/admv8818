@@ -238,7 +238,6 @@ static int admv8818_lpf_select(struct admv8818_dev *dev, u64 freq)
 	return ret;
 }
 
-
 static int admv8818_filter_bypass(struct admv8818_dev *dev)
 {
 	int ret;
@@ -262,6 +261,7 @@ static int admv8818_filter_bypass(struct admv8818_dev *dev)
 				ADMV8818_LPF_WR0_MSK,
 				FIELD_PREP(ADMV8818_HPF_WR0_MSK, 0) |
 				FIELD_PREP(ADMV8818_LPF_WR0_MSK, 0));
+
 exit:
 	mutex_unlock(&dev->lock);
 
@@ -283,11 +283,16 @@ static int admv8818_rfin_band_select(struct admv8818_dev *dev)
 		hpf = dev->clkin_freq - div_u64(dev->bw_freq * dev->freq_scale, 2);
 	}
 
-	ret = admv8818_hpf_select(dev, hpf);
-	if (ret)
-		return ret;
+	mutex_lock(&dev->lock);
 
-	return admv8818_lpf_select(dev, lpf);
+	ret = __admv8818_hpf_select(dev, hpf);
+	if (ret)
+		goto exit;
+
+	ret = __admv8818_lpf_select(dev, lpf);
+exit:
+	mutex_unlock(&dev->lock);
+	return ret;
 }
 
 static int __admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned int *hpf_freq)
@@ -453,11 +458,9 @@ exit:
 	switch ((u32)private) {
 	case ADMV8818_BW_FREQ:
 		val = lpf_freq - hpf_freq;
-
 		break;
 	case ADMV8818_CENTER_FREQ:
 		val = hpf_freq + (lpf_freq - hpf_freq) / 2;
-
 		break;
 	default:
 		return -EINVAL;
