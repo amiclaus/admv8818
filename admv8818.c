@@ -18,6 +18,7 @@
 #include <linux/notifier.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
+#include <linux/iio/sysfs.h>
 
 /* ADMV8818 Register Map */
 #define ADMV8818_REG_SPI_CONFIG_A		0x0
@@ -466,7 +467,7 @@ exit:
 		return -EINVAL;
 	}
 
-	return sprintf(buf, "%u\n", val);
+	return sysfs_emit(buf, "%u\n", val);
 }
 
 static ssize_t admv8818_write(struct iio_dev *indio_dev,
