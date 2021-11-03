@@ -41,29 +41,16 @@ properties:
   clock-output-names:
     maxItems: 1
 
-  clock-scales:
+  adi,bw-hz:
     description:
-      The Common Clock Framework max rate is limited by MAX of unsigned long.
-      For ADMV8818 device this is a deficiency. If specified, this
-      property allows arbitrary scales. The first element in the array should
-      be the multiplier and the second element should be the divider.
-    $ref: /schemas/types.yaml#/definitions/uint32-array
-    minimum: 1
+      Allows the user to increase the Bandpass Filter (BPF) bandwidth
+      in Hz. Normally when invoked by the clk notifier, the driver
+      sets the HPF cutoff close below the frequency and the LPF cutoff
+      close above the frequency, and thus creating a BPF.
+    $ref: /schemas/types.yaml#/definitions/uint64
 
   '#clock-cells':
     const: 0
-
-  adi,tolerance-percent:
-    description:
-      Allows the user to increase the Bandpass Filter (BPF) bandwidth
-      in percent. Normally when invoked by the clk notifier, the driver
-      sets the HPF cutoff close below the frequency and the LPF cutoff
-      close above the frequency, and thus creating a BPF.
-      This tolerance value in percent is applied to both the HPF and LPF
-      before selecting the proper filter bank.
-    $ref: /schemas/types.yaml#/definitions/uint32
-    minimum: 0
-    maximum: 50
 
 required:
   - compatible
@@ -83,9 +70,8 @@ examples:
         reg = <0>;
         spi-max-frequency = <10000000>;
         clocks = <&admv8818_rfin>;
-        clock-scales = <1 5>;
         clock-names = "rf_in";
-        adi,tolerance-percent = <3>;
+        adi,bw-hz = /bits/ 64 <600000000>;
       };
     };
 ...
