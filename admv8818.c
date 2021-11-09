@@ -271,18 +271,16 @@ exit:
 static int admv8818_rfin_band_select(struct admv8818_state *st)
 {
 	int ret;
-	u64 lpf, hpf, clk;
+	u64 lpf, hpf;
 
-	clk = clk_get_rate(st->clkin);
-
-	st->cf_hz = clk;
+	st->cf_hz = clk_get_rate(st->clkin);
 
 	if (!st->bw_hz) {
-		lpf = clk;
-		hpf = clk;
+		lpf = st->cf_hz;
+		hpf = st->cf_hz;
 	} else {
-		lpf = clk + div_u64(st->bw_hz, 2);
-		hpf = clk - div_u64(st->bw_hz, 2);
+		lpf = st->cf_hz + div_u64(st->bw_hz, 2);
+		hpf = st->cf_hz - div_u64(st->bw_hz, 2);
 	}
 
 	mutex_lock(&st->lock);
