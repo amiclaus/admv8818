@@ -83,7 +83,7 @@ struct admv8818_state {
 	struct regmap		*regmap;
 	struct clk		*clkin;
 	struct notifier_block	nb;
-	/* Protect against concurrent accesses to the device */
+	/* Protect against concurrent accesses to the device and data content*/
 	struct mutex		lock;
 	unsigned int		filter_mode;
 	unsigned int		freq_scale;
