@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /dts-v1/;
 /plugin/;
 
 / {
 	compatible = "brcm,bcm2835";
-
-
 
 	fragment@0 {
 		target = <&spidev0>;
@@ -44,6 +43,7 @@
 				clocks = <&admv8818_rfin>;
 				clock-scales = <1 50>;
 				clock-names = "rf_in";
+				adi,bw-hz = /bits/ 64 <600000000>;
 			};
 		};
 	};
