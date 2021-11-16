@@ -78,6 +78,12 @@ enum {
 	ADMV8818_CENTER_FREQ
 };
 
+enum {
+	ADMV8818_AUTO_MODE,
+	ADMV8818_MANUAL_MODE,
+	ADMV8818_BYPASS_MODE,
+};
+
 struct admv8818_state {
 	struct spi_device	*spi;
 	struct regmap		*regmap;
@@ -533,7 +539,7 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 	int ret = 0;
 
 	switch (mode) {
-	case 0:
+	case ADMV8818_AUTO_MODE:
 		if (st->filter_mode && st->clkin) {
 			ret = clk_prepare_enable(st->clkin);
 			if (ret)
@@ -547,7 +553,7 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 		}
 
 		break;
-	case 1:
+	case ADMV8818_MANUAL_MODE:
 		if (st->filter_mode == 0 && st->clkin) {
 			clk_disable_unprepare(st->clkin);
 
@@ -561,7 +567,7 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 			return ret;
 
 		break;
-	case 2:
+	case ADMV8818_BYPASS_MODE:
 		if (st->filter_mode == 0 && st->clkin) {
 			clk_disable_unprepare(st->clkin);
 
