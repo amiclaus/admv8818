@@ -81,7 +81,6 @@ enum {
 enum {
 	ADMV8818_AUTO_MODE,
 	ADMV8818_MANUAL_MODE,
-	ADMV8818_BYPASS_MODE,
 };
 
 struct admv8818_state {
@@ -94,7 +93,6 @@ struct admv8818_state {
 	unsigned int		filter_mode;
 	unsigned int		freq_scale;
 	u64			cf_hz;
-	u64			bw_hz;
 };
 
 static const unsigned long long freq_range_hpf[4][2] = {
@@ -120,8 +118,7 @@ static const struct regmap_config admv8818_regmap_config = {
 
 static const char * const admv8818_modes[] = {
 	[0] = "auto",
-	[1] = "bypass",
-	[2] = "manual"
+	[1] = "manual"
 };
 
 static int __admv8818_hpf_select(struct admv8818_state *st, u64 freq)
@@ -244,58 +241,19 @@ static int admv8818_lpf_select(struct admv8818_state *st, u64 freq)
 	return ret;
 }
 
-static int admv8818_filter_bypass(struct admv8818_state *st)
-{
-	int ret;
-
-	mutex_lock(&st->lock);
-
-	ret = regmap_update_bits(st->regmap, ADMV8818_REG_WR0_SW,
-				 ADMV8818_SW_IN_SET_WR0_MSK |
-				 ADMV8818_SW_IN_WR0_MSK |
-				 ADMV8818_SW_OUT_SET_WR0_MSK |
-				 ADMV8818_SW_OUT_WR0_MSK,
-				 FIELD_PREP(ADMV8818_SW_IN_SET_WR0_MSK, 1) |
-				 FIELD_PREP(ADMV8818_SW_IN_WR0_MSK, 0) |
-				 FIELD_PREP(ADMV8818_SW_OUT_SET_WR0_MSK, 1) |
-				 FIELD_PREP(ADMV8818_SW_OUT_WR0_MSK, 0));
-	if (ret)
-		goto exit;
-
-	ret = regmap_update_bits(st->regmap, ADMV8818_REG_WR0_FILTER,
-				 ADMV8818_HPF_WR0_MSK |
-				 ADMV8818_LPF_WR0_MSK,
-				 FIELD_PREP(ADMV8818_HPF_WR0_MSK, 0) |
-				 FIELD_PREP(ADMV8818_LPF_WR0_MSK, 0));
-
-exit:
-	mutex_unlock(&st->lock);
-
-	return ret;
-}
-
 static int admv8818_rfin_band_select(struct admv8818_state *st)
 {
 	int ret;
-	u64 lpf, hpf;
 
 	st->cf_hz = clk_get_rate(st->clkin);
 
-	if (!st->bw_hz) {
-		lpf = st->cf_hz;
-		hpf = st->cf_hz;
-	} else {
-		lpf = st->cf_hz + div_u64(st->bw_hz, 2);
-		hpf = st->cf_hz - div_u64(st->bw_hz, 2);
-	}
-
 	mutex_lock(&st->lock);
 
-	ret = __admv8818_hpf_select(st, hpf);
+	ret = __admv8818_hpf_select(st, st->cf_hz);
 	if (ret)
 		goto exit;
 
-	ret = __admv8818_lpf_select(st, lpf);
+	ret = __admv8818_lpf_select(st, st->cf_hz);
 exit:
 	mutex_unlock(&st->lock);
 	return ret;
@@ -442,87 +400,6 @@ static int admv8818_reg_access(struct iio_dev *indio_dev,
 		return regmap_write(st->regmap, reg, write_val);
 }
 
-static ssize_t admv8818_read(struct iio_dev *indio_dev,
-			     uintptr_t private,
-			     const struct iio_chan_spec *chan,
-			     char *buf)
-{
-	struct admv8818_state *st = iio_priv(indio_dev);
-	u64 val, lpf_freq, hpf_freq;
-	int ret;
-
-	mutex_lock(&st->lock);
-
-	ret = __admv8818_read_lpf_freq(st, &lpf_freq);
-	if (ret)
-		goto exit;
-
-	ret = __admv8818_read_hpf_freq(st, &hpf_freq);
-
-exit:
-	mutex_unlock(&st->lock);
-
-	if (ret)
-		return ret;
-
-	switch ((u32)private) {
-	case ADMV8818_BW_FREQ:
-		val = lpf_freq - hpf_freq;
-		break;
-	case ADMV8818_CENTER_FREQ:
-		val = hpf_freq + (lpf_freq - hpf_freq) / 2;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	return sysfs_emit(buf, "%llu\n", val);
-}
-
-static ssize_t admv8818_write(struct iio_dev *indio_dev,
-			      uintptr_t private,
-			      const struct iio_chan_spec *chan,
-			      const char *buf, size_t len)
-{
-	struct admv8818_state *st = iio_priv(indio_dev);
-	unsigned long long freq, lpf_freq, hpf_freq;
-	int ret;
-
-	ret = kstrtoull(buf, 10, &freq);
-	if (ret)
-		return ret;
-
-	switch ((u32)private) {
-	case ADMV8818_BW_FREQ:
-		st->bw_hz = freq;
-		hpf_freq = st->cf_hz - div_u64(freq, 2);
-		lpf_freq = hpf_freq + freq;
-
-		break;
-	case ADMV8818_CENTER_FREQ:
-		st->cf_hz = freq;
-		hpf_freq = freq - div_u64(st->bw_hz, 2);
-		lpf_freq = hpf_freq + st->bw_hz;
-
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	mutex_lock(&st->lock);
-
-	ret = __admv8818_lpf_select(st, lpf_freq);
-	if (ret)
-		goto exit;
-
-	ret = __admv8818_hpf_select(st, hpf_freq);
-
-exit:
-	mutex_unlock(&st->lock);
-
-	return ret ? ret : len;
-}
-
 static int admv8818_get_mode(struct iio_dev *indio_dev,
 			     const struct iio_chan_spec *chan)
 {
@@ -560,20 +437,6 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 			ret = clk_notifier_unregister(st->clkin, &st->nb);
 			if (ret)
 				return ret;
-		}
-
-		ret = admv8818_filter_bypass(st);
-		if (ret)
-			return ret;
-
-		break;
-	case ADMV8818_BYPASS_MODE:
-		if (st->filter_mode == 0 && st->clkin) {
-			clk_disable_unprepare(st->clkin);
-
-			ret = clk_notifier_unregister(st->clkin, &st->nb);
-			if (ret)
-				return ret;
 		} else {
 			return ret;
 		}
@@ -594,14 +457,6 @@ static const struct iio_info admv8818_info = {
 	.debugfs_reg_access = &admv8818_reg_access,
 };
 
-#define _ADMV8818_EXT_INFO(_name, _shared, _ident) { \
-		.name = _name, \
-		.read = admv8818_read, \
-		.write = admv8818_write, \
-		.private = _ident, \
-		.shared = _shared, \
-}
-
 static const struct iio_enum admv8818_mode_enum = {
 	.items = admv8818_modes,
 	.num_items = ARRAY_SIZE(admv8818_modes),
@@ -609,21 +464,9 @@ static const struct iio_enum admv8818_mode_enum = {
 	.set = admv8818_set_mode,
 };
 
-#define IIO_ENUM_AVAILABLE_SHARED(_name, _shared, _e) \
-{ \
-	.name = (_name "_available"), \
-	.shared = _shared, \
-	.read = iio_enum_available_read, \
-	.private = (uintptr_t)(_e), \
-}
-
 static const struct iio_chan_spec_ext_info admv8818_ext_info[] = {
-	_ADMV8818_EXT_INFO("filter_band_pass_bandwidth_3db_frequency", IIO_SEPARATE,
-			   ADMV8818_BW_FREQ),
-	_ADMV8818_EXT_INFO("filter_band_pass_center_frequency", IIO_SEPARATE,
-			   ADMV8818_CENTER_FREQ),
-	IIO_ENUM("mode", IIO_SEPARATE, &admv8818_mode_enum),
-	IIO_ENUM_AVAILABLE_SHARED("mode", IIO_SEPARATE, &admv8818_mode_enum),
+	IIO_ENUM("filter_mode", IIO_SHARED_BY_ALL, &admv8818_mode_enum),
+	IIO_ENUM_AVAILABLE("filter_mode", IIO_SHARED_BY_ALL, &admv8818_mode_enum),
 	{ },
 };
 
@@ -741,8 +584,6 @@ static int admv8818_clk_setup(struct admv8818_state *st)
 				     "failed to get the input clock\n");
 	else if (!st->clkin)
 		return 0;
-
-	device_property_read_u64(&spi->dev, "adi,bw-hz", &st->bw_hz);
 
 	ret = clk_prepare_enable(st->clkin);
 	if (ret)
