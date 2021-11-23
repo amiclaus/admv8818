@@ -41,13 +41,6 @@ properties:
   clock-output-names:
     maxItems: 1
 
-  adi,bw-hz:
-    description:
-      Allows the user to increase the Bandpass Filter (BPF) bandwidth
-      in Hz. Normally when invoked by the clk notifier, the driver
-      sets the HPF cutoff close below the frequency and the LPF cutoff
-      close above the frequency, and thus creating a BPF.
-
   '#clock-cells':
     const: 0
 
@@ -70,7 +63,6 @@ examples:
         spi-max-frequency = <10000000>;
         clocks = <&admv8818_rfin>;
         clock-names = "rf_in";
-        adi,bw-hz = /bits/ 64 <600000000>;
       };
     };
 ...
