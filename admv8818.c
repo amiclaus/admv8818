@@ -91,7 +91,6 @@ struct admv8818_state {
 	/* Protect against concurrent accesses to the device and data content*/
 	struct mutex		lock;
 	unsigned int		filter_mode;
-	unsigned int		freq_scale;
 	u64			cf_hz;
 };
 
@@ -341,16 +340,13 @@ static int admv8818_write_raw(struct iio_dev *indio_dev,
 {
 	struct admv8818_state *st = iio_priv(indio_dev);
 
-	u64 freq = (u64)val * st->freq_scale;
+	u64 freq = ((u64)val2 << 32 | (u32)val);
 
 	switch (info) {
 	case IIO_CHAN_INFO_LOW_PASS_FILTER_3DB_FREQUENCY:
 		return admv8818_lpf_select(st, freq);
 	case IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY:
 		return admv8818_hpf_select(st, freq);
-	case IIO_CHAN_INFO_SCALE:
-		st->freq_scale = val;
-		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -370,18 +366,19 @@ static int admv8818_read_raw(struct iio_dev *indio_dev,
 		if (ret)
 			return ret;
 
-		*val = div_u64(freq, st->freq_scale);
-		return IIO_VAL_INT;
+		*val = (u32)freq;
+		*val2 = (u32)(freq >> 32);
+
+		return IIO_VAL_INT_64;
 	case IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY:
 		ret = admv8818_read_hpf_freq(st, &freq);
 		if (ret)
 			return ret;
 
-		*val = div_u64(freq, st->freq_scale);
-		return IIO_VAL_INT;
-	case IIO_CHAN_INFO_SCALE:
-		*val = st->freq_scale;
-		return IIO_VAL_INT;
+		*val = (u32)freq;
+		*val2 = (u32)(freq >> 32);
+
+		return IIO_VAL_INT_64;
 	default:
 		return -EINVAL;
 	}
@@ -415,31 +412,39 @@ static int admv8818_set_mode(struct iio_dev *indio_dev,
 	struct admv8818_state *st = iio_priv(indio_dev);
 	int ret = 0;
 
+	if (!st->clkin) {
+		if (mode == ADMV8818_MANUAL_MODE)
+			return 0;
+
+		return -EINVAL;
+	}
+
 	switch (mode) {
 	case ADMV8818_AUTO_MODE:
-		if (st->filter_mode && st->clkin) {
-			ret = clk_prepare_enable(st->clkin);
-			if (ret)
-				return ret;
+		if (!st->filter_mode)
+			return 0;
 
-			ret = clk_notifier_register(st->clkin, &st->nb);
-			if (ret)
-				return ret;
-		} else {
+		ret = clk_prepare_enable(st->clkin);
+		if (ret)
+			return ret;
+
+		ret = clk_notifier_register(st->clkin, &st->nb);
+		if (ret) {
+			clk_disable_unprepare(st->clkin);
+
 			return ret;
 		}
 
 		break;
 	case ADMV8818_MANUAL_MODE:
-		if (st->filter_mode == 0 && st->clkin) {
-			clk_disable_unprepare(st->clkin);
+		if (st->filter_mode)
+			return 0;
 
-			ret = clk_notifier_unregister(st->clkin, &st->nb);
-			if (ret)
-				return ret;
-		} else {
+		clk_disable_unprepare(st->clkin);
+
+		ret = clk_notifier_unregister(st->clkin, &st->nb);
+		if (ret)
 			return ret;
-		}
 
 		break;
 	default:
@@ -477,8 +482,7 @@ static const struct iio_chan_spec_ext_info admv8818_ext_info[] = {
 	.channel = _channel,					\
 	.info_mask_separate =					\
 		BIT(IIO_CHAN_INFO_LOW_PASS_FILTER_3DB_FREQUENCY) | \
-		BIT(IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY) | \
-		BIT(IIO_CHAN_INFO_SCALE) \
+		BIT(IIO_CHAN_INFO_HIGH_PASS_FILTER_3DB_FREQUENCY) \
 }
 
 #define ADMV8818_CHAN_BW_CF(_channel, _admv8818_ext_info) {	\
@@ -564,8 +568,6 @@ static int admv8818_init(struct admv8818_state *st)
 		dev_err(&spi->dev, "ADMV8818 Single Instruction failed.\n");
 		return ret;
 	}
-
-	st->freq_scale = HZ_PER_MHZ;
 
 	if (st->clkin)
 		return admv8818_rfin_band_select(st);
