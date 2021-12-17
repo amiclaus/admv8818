@@ -8,8 +8,6 @@
 #include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/clk.h>
-#include <linux/clkdev.h>
-#include <linux/clk-provider.h>
 #include <linux/device.h>
 #include <linux/iio/iio.h>
 #include <linux/module.h>
@@ -18,7 +16,6 @@
 #include <linux/notifier.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
-#include <linux/iio/sysfs.h>
 #include <linux/units.h>
 
 /* ADMV8818 Register Map */
