@@ -103,6 +103,11 @@
 #define ADMV8818_HPF_WR0_MSK			NO_OS_GENMASK(7, 4)
 #define ADMV8818_LPF_WR0_MSK			NO_OS_GENMASK(3, 0)
 
+/* Specifications */
+#define ADMV8818_BUFF_SIZE_BYTES		2
+#define ADMV8818_CHIP_ID			NO_OS_BIT(0)
+#define ADMV8818_SPI_READ_CMD			NO_OS_BIT(7)
+
 /******************************************************************************/
 /*************************** Types Declarations *******************************/
 /******************************************************************************/
