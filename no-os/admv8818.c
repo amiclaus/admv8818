@@ -42,7 +42,7 @@
 /******************************************************************************/
 #include <malloc.h>
 #include "admv8818.h"
-
+#include "no_os_error.h"
 
 /******************************************************************************/
 /********************** Macros and Constants Definitions **********************/
@@ -121,7 +121,7 @@ int admv8818_spi_read(struct admv8818_dev *dev, uint8_t reg_addr,
 int admv8818_spi_update_bits(struct admv8818_dev *dev, uint8_t reg_addr,
 			     uint8_t mask, uint8_t data)
 {
-	uint16_t read_val;
+	uint8_t read_val;
 	int ret;
 
 	ret = admv8818_spi_read(dev, reg_addr, &read_val);
@@ -355,18 +355,18 @@ int admv8818_init(struct admv8818_dev **device,
 		goto error_dev;
 
 	ret = admv8818_spi_update_bits(dev, ADMV8818_REG_SPI_CONFIG_A,
-				 ADMV8818_SOFTRESET_N_MSK |
-				 ADMV8818_SOFTRESET_MSK,
-				 no_os_field_prep(ADMV8818_SOFTRESET_N_MSK, 1) |
-				 no_os_field_prep(ADMV8818_SOFTRESET_MSK, 1));
+				       ADMV8818_SOFTRESET_N_MSK |
+				       ADMV8818_SOFTRESET_MSK,
+				       no_os_field_prep(ADMV8818_SOFTRESET_N_MSK, 1) |
+				       no_os_field_prep(ADMV8818_SOFTRESET_MSK, 1));
 	if (ret)
 		goto error_spi;
 
 	ret = admv8818_spi_update_bits(dev, ADMV8818_REG_SPI_CONFIG_A,
-				 ADMV8818_SDOACTIVE_N_MSK |
-				 ADMV8818_SDOACTIVE_MSK,
-				 no_os_field_prep(ADMV8818_SDOACTIVE_N_MSK, 1) |
-				 no_os_field_prep(ADMV8818_SDOACTIVE_MSK, 1));
+				       ADMV8818_SDOACTIVE_N_MSK |
+				       ADMV8818_SDOACTIVE_MSK,
+				       no_os_field_prep(ADMV8818_SDOACTIVE_N_MSK, 1) |
+				       no_os_field_prep(ADMV8818_SDOACTIVE_MSK, 1));
 	if (ret)
 		goto error_spi;
 
@@ -380,8 +380,8 @@ int admv8818_init(struct admv8818_dev **device,
 	}
 
 	ret = admv8818_spi_update_bits(dev, ADMV8818_REG_SPI_CONFIG_B,
-				 ADMV8818_SINGLE_INSTRUCTION_MSK,
-				 no_os_field_prep(ADMV8818_SINGLE_INSTRUCTION_MSK, 1));
+				       ADMV8818_SINGLE_INSTRUCTION_MSK,
+				       no_os_field_prep(ADMV8818_SINGLE_INSTRUCTION_MSK, 1));
 
 	if (ret)
 		goto error_spi;
@@ -403,7 +403,6 @@ error_dev:
 
 	return ret;
 }
-
 
 /**
  * @brief ADMV8818 Resources Deallocation.
