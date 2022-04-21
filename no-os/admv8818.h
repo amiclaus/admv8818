@@ -182,4 +182,3 @@ int admv8818_init(struct admv8818_dev **device,
 int admv8818_remove(struct admv8818_dev *dev);
 
 #endif /* ADMV8818_H_ */
-
