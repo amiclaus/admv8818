@@ -131,7 +131,7 @@ struct admv8818_init_param {
 	/** LO Input Frequency */
 	unsigned long long		rf_in;
 	/* Filter Mode */
-	enum admv8818_filte_mode	mode;
+	enum admv8818_filter_mode	mode;
 };
 
 /**
@@ -144,20 +144,20 @@ struct admv8818_dev {
 	/** LO Input Frequency */
 	unsigned long long		rf_in;
 	/* Filter Mode */
-	enum admv8818_filte_mode	mode;
+	enum admv8818_filter_mode	mode;
 };
 
 /** ADMV8818 SPI write */
 int admv8818_spi_write(struct admv8818_dev *dev, uint8_t reg_addr,
-		       uint16_t data);
+		       uint8_t data);
 
 /* ADMV8818 Register Update */
 int admv8818_spi_update_bits(struct admv8818_dev *dev, uint8_t reg_addr,
-			     uint16_t mask, uint16_t data);
+			     uint8_t mask, uint8_t data);
 
 /** ADMV8818 SPI Read */
 int admv8818_spi_read(struct admv8818_dev *dev, uint8_t reg_addr,
-		      uint16_t *data);
+		      uint8_t *data);
 
 /** Set the HPF Frequency */
 int admv8818_hpf_select(struct admv8818_dev *dev, unsigned long long freq);
