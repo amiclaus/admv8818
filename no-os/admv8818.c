@@ -135,6 +135,201 @@ int admv8818_spi_update_bits(struct admv8818_dev *dev, uint8_t reg_addr,
 }
 
 /**
+ * @brief Set the HPF Frequency.
+ * @param dev - The device structure.
+ * @param freq - The HPF Frequency to be set.
+ * @return Returns 0 in case of success or negative error code.
+ */
+int admv8818_hpf_select(struct admv8818_dev *dev, unsigned long long freq)
+{
+	unsigned int hpf_step = 0, hpf_band = 0, i, j;
+	unsigned long long freq_step;
+	int ret;
+
+	if (freq < freq_range_hpf[0][0])
+		goto hpf_write;
+
+	if (freq > freq_range_hpf[3][1]) {
+		hpf_step = 15;
+		hpf_band = 4;
+
+		goto hpf_write;
+	}
+
+	for (i = 0; i < 4; i++) {
+		freq_step = (freq_range_hpf[i][1] - freq_range_hpf[i][0]) / 15;
+
+		if (freq > freq_range_hpf[i][0] &&
+		    (freq < freq_range_hpf[i][1] + freq_step)) {
+			hpf_band = i + 1;
+
+			for (j = 1; j <= 16; j++) {
+				if (freq < (freq_range_hpf[i][0] + (freq_step * j))) {
+					hpf_step = j - 1;
+					break;
+				}
+			}
+			break;
+		}
+	}
+
+	/* Close HPF frequency gap between 12 and 12.5 GHz */
+	if (freq >= 12000000000 && freq <= 12500000000) {
+		hpf_band = 3;
+		hpf_step = 15;
+	}
+
+hpf_write:
+	ret = admv8818_spi_update_bits(dev, ADMV8818_REG_WR0_SW,
+				       ADMV8818_SW_IN_SET_WR0_MSK |
+				       ADMV8818_SW_IN_WR0_MSK,
+				       no_os_field_prep(ADMV8818_SW_IN_SET_WR0_MSK, 1) |
+				       no_os_field_prep(ADMV8818_SW_IN_WR0_MSK, hpf_band));
+	if (ret)
+		return ret;
+
+	return admv8818_spi_update_bits(dev, ADMV8818_REG_WR0_FILTER,
+					ADMV8818_HPF_WR0_MSK,
+					no_os_field_prep(ADMV8818_HPF_WR0_MSK, hpf_step));
+}
+
+/**
+ * @brief Get the HPF Frequency.
+ * @param dev - The device structure.
+ * @param freq - The HPF Frequency.
+ * @return Returns 0 in case of success or negative error code.
+ */
+int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned long long *freq)
+{
+	unsigned int hpf_band, hpf_state;
+	uint8_t data;
+	int ret;
+
+	ret = admv8818_spi_read(dev, ADMV8818_REG_WR0_SW, &data);
+	if (ret)
+		return ret;
+
+	hpf_band = no_os_field_get(ADMV8818_SW_IN_WR0_MSK, data);
+	if (!hpf_band) {
+		*freq = 0;
+		return ret;
+	}
+
+	ret = admv8818_spi_read(dev, ADMV8818_REG_WR0_FILTER, &data);
+	if (ret)
+		return ret;
+
+	hpf_state = no_os_field_get(ADMV8818_HPF_WR0_MSK, data);
+
+	*freq = (freq_range_hpf[hpf_band - 1][1] - freq_range_hpf[hpf_band - 1][0]) /
+		15;
+	*freq = freq_range_hpf[hpf_band - 1][0] + (*freq * hpf_state);
+
+	return 0;
+}
+
+/**
+ * @brief Set the LPF Frequency.
+ * @param dev - The device structure.
+ * @param freq - The LPF Frequency to be set.
+ * @return Returns 0 in case of success or negative error code.
+ */
+int admv8818_lpf_select(struct admv8818_dev *dev, unsigned long long freq)
+{
+	unsigned int lpf_step = 0, lpf_band = 0, i, j;
+	unsigned long long freq_step;
+	int ret;
+
+	if (freq > freq_range_lpf[3][1])
+		goto lpf_write;
+
+	if (freq < freq_range_lpf[0][0]) {
+		lpf_band = 1;
+
+		goto lpf_write;
+	}
+
+	for (i = 0; i < 4; i++) {
+		if (freq > freq_range_lpf[i][0] && freq < freq_range_lpf[i][1]) {
+			lpf_band = i + 1;
+			freq_step = (freq_range_lpf[i][1] - freq_range_lpf[i][0]) / 15;
+
+			for (j = 0; j <= 15; j++) {
+				if (freq < (freq_range_lpf[i][0] + (freq_step * j))) {
+					lpf_step = j;
+					break;
+				}
+			}
+			break;
+		}
+	}
+
+lpf_write:
+	ret = admv8818_spi_update_bits(dev, ADMV8818_REG_WR0_SW,
+				       ADMV8818_SW_OUT_SET_WR0_MSK |
+				       ADMV8818_SW_OUT_WR0_MSK,
+				       no_os_field_prep(ADMV8818_SW_OUT_SET_WR0_MSK, 1) |
+				       no_os_field_prep(ADMV8818_SW_OUT_WR0_MSK, lpf_band));
+	if (ret)
+		return ret;
+
+	return admv8818_spi_update_bits(dev, ADMV8818_REG_WR0_FILTER,
+					ADMV8818_LPF_WR0_MSK,
+					no_os_field_prep(ADMV8818_LPF_WR0_MSK, lpf_step));
+}
+
+/**
+ * @brief Get the HPF Frequency.
+ * @param dev - The device structure.
+ * @param freq - The HPF Frequency.
+ * @return Returns 0 in case of success or negative error code.
+ */
+int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned long long *freq)
+{
+	unsigned int lpf_band, lpf_state;
+	uint8_t data;
+	int ret;
+
+	ret = admv8818_spi_read(dev, ADMV8818_REG_WR0_SW, &data);
+	if (ret)
+		return ret;
+
+	lpf_band = no_os_field_get(ADMV8818_SW_OUT_WR0_MSK, data);
+	if (!lpf_band) {
+		*freq= 0;
+		return ret;
+	}
+
+	ret = admv8818_spi_read(dev, ADMV8818_REG_WR0_FILTER, &data);
+	if (ret)
+		return ret;
+
+	lpf_state = no_os_field_get(ADMV8818_LPF_WR0_MSK, data);
+
+	*freq = (freq_range_lpf[lpf_band - 1][1] - freq_range_lpf[lpf_band - 1][0]) /
+		15;
+	*freq = freq_range_lpf[lpf_band - 1][0] + (*freq * lpf_state);
+
+	return 0;
+}
+
+/**
+ * @brief Set the RF Input Band Select.
+ * @param device - The device structure.
+ * @return Returns 0 in case of success or negative error code.
+ */
+int admv8818_rfin_select(struct admv8818_dev *dev)
+{
+	int ret;
+
+	ret = admv8818_hpf_select(dev, dev->rf_in);
+	if (ret)
+		return ret;
+
+	return admv8818_lpf_select(dev, dev->rf_in);
+}
+
+/**
  * @brief Initializes the admv8818.
  * @param device - The device structure.
  * @param init_param - The structure containing the device initial parameters.
