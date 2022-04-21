@@ -166,7 +166,7 @@ int admv8818_hpf_select(struct admv8818_dev *dev, unsigned long long freq);
 int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned long long *freq);
 
 /** Set the LPF Frequency */
-int admv8818_lpf_select(struct admv8818_dev *dev, unsigned long log freq);
+int admv8818_lpf_select(struct admv8818_dev *dev, unsigned long long freq);
 
 /** Get the LPF Frequency */
 int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned long long *freq);
