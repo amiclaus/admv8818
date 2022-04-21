@@ -315,7 +315,7 @@ int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned long long *freq)
 
 /**
  * @brief Set the RF Input Band Select.
- * @param device - The device structure.
+ * @param dev - The device structure.
  * @return Returns 0 in case of success or negative error code.
  */
 int admv8818_rfin_select(struct admv8818_dev *dev)
