@@ -208,3 +208,22 @@ error_dev:
 
 	return ret;
 }
+
+
+/**
+ * @brief ADMV8818 Resources Deallocation.
+ * @param dev - The device structure.
+ * @return Returns 0 in case of success or negative error code otherwise.
+ */
+int admv8818_remove(struct admv8818_dev *dev)
+{
+	int ret;
+
+	ret = no_os_spi_remove(dev->spi_desc);
+	if (ret)
+		return ret;
+
+	free(dev);
+
+	return 0;
+}
