@@ -156,6 +156,7 @@ int admv8818_hpf_select(struct admv8818_dev *dev, unsigned long long freq)
 		goto hpf_write;
 	}
 
+	/* Find and compute the closest HPF band and state relative to the input frequency */
 	for (i = 0; i < 4; i++) {
 		freq_step = (freq_range_hpf[i][1] - freq_range_hpf[i][0]) / 15;
 
@@ -221,6 +222,7 @@ int admv8818_read_hpf_freq(struct admv8818_dev *dev, unsigned long long *freq)
 
 	hpf_state = no_os_field_get(ADMV8818_HPF_WR0_MSK, data);
 
+	/* Compute HPF value based on the band and state values read from the registers */
 	*freq = (freq_range_hpf[hpf_band - 1][1] - freq_range_hpf[hpf_band - 1][0]) /
 		15;
 	*freq = freq_range_hpf[hpf_band - 1][0] + (*freq * hpf_state);
@@ -249,6 +251,7 @@ int admv8818_lpf_select(struct admv8818_dev *dev, unsigned long long freq)
 		goto lpf_write;
 	}
 
+	/* Find and compute the closest LPF band and state relative to the input frequency */
 	for (i = 0; i < 4; i++) {
 		if (freq > freq_range_lpf[i][0] && freq < freq_range_lpf[i][1]) {
 			lpf_band = i + 1;
@@ -306,6 +309,7 @@ int admv8818_read_lpf_freq(struct admv8818_dev *dev, unsigned long long *freq)
 
 	lpf_state = no_os_field_get(ADMV8818_LPF_WR0_MSK, data);
 
+	/* Compute LPF value based on the band and state values read from the registers */
 	*freq = (freq_range_lpf[lpf_band - 1][1] - freq_range_lpf[lpf_band - 1][0]) /
 		15;
 	*freq = freq_range_lpf[lpf_band - 1][0] + (*freq * lpf_state);
